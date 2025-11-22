@@ -1,0 +1,44 @@
+# Dockerfile.backend
+
+# --- 1. Build Stage ---
+    FROM rust:1.74-slim-bullseye as builder
+
+    WORKDIR /app
+    COPY backend/Cargo.toml backend/Cargo.lock ./
+    # Copy only required files for the first build layer (to cache deps)
+    RUN mkdir src
+    RUN echo "fn main() {}" > src/main.rs
+    RUN cargo build --release
+    
+    # Copy the rest of the source code
+    COPY backend/src ./src
+    COPY backend/.env ./
+    COPY backend/db/migrations ./db/migrations
+    
+    # Rebuild with actual source
+    RUN touch src/main.rs # Force recompile
+    RUN cargo build --release
+    
+    # --- 2. Final Stage ---
+    FROM debian:bullseye-slim
+    
+    # Install PostgreSQL client for timezone info and other utilities
+    RUN apt-get update && apt-get install -y \
+        ca-certificates \
+        libpq-dev \
+        && rm -rf /var/lib/apt/lists/*
+    
+    WORKDIR /app
+    # Copy the built binary and necessary environment files
+    COPY --from=builder /app/target/release/job_scheduler_backend ./job_scheduler_backend
+    COPY backend/.env .
+    
+    # Set environment variables for the application
+    ENV RUST_LOG=info
+    ENV DATABASE_URL=postgres://postgres:heisenberg@db:5432/scheduler_db
+    ENV REDIS_URL=redis://redis:6379/
+    ENV LISTEN_ADDR=0.0.0.0:8000
+    
+    EXPOSE 8000
+    
+    CMD ["./job_scheduler_backend"]
